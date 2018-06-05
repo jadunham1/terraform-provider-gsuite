@@ -6,7 +6,7 @@ import (
 
 	"github.com/hashicorp/terraform/helper/schema"
 	directory "google.golang.org/api/admin/directory/v1"
-	"google.golang.org/api/googleapi"
+//	"google.golang.org/api/googleapi"
 )
 
 func resourceGroupMembers() *schema.Resource {
@@ -175,7 +175,7 @@ func reconcileMembers(d *schema.ResourceData, cfgMembers, apiMembers []map[strin
 					Role: cfgRole,
 				}
 
-				if cfgRole != "MEMBER" {
+				if cfgRole != "MEMBER" && isMemberGroup(cfgMember["email"].(string), config) {
 					return fmt.Errorf("Error updating groupMember (%s): nested groups should be role MEMBER", cfgMember["email"].(string))
 				}
 
@@ -203,12 +203,28 @@ func reconcileMembers(d *schema.ResourceData, cfgMembers, apiMembers []map[strin
 
 	// Upsert memberships which are present in the config, but not in the api
 	for email, _ := range cfgMap {
+		log.Printf("[INFO] Upserting a member groupMember: %s", email)
 		err := upsertMember(email, gid, cfgMap[email]["role"].(string), config)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func isMemberGroup(email string, config *Config) bool {
+	var isGroup bool
+	var group *directory.Group
+	var err error
+	err = retry(func() error {
+		group, err = config.directory.Groups.Get(email).Do()
+		return err
+	})
+	isGroup = true
+	if err != nil {
+		isGroup = false
+	}
+    return isGroup
 }
 
 // Retrieve a group's members from the API
@@ -243,19 +259,7 @@ func upsertMember(email, groupEmail, role string, config *Config) error {
 		Email: email,
 	}
 
-	// Check if the email address belongs to a user, or to a group
-	// we need to make sure, because we need to use different logic
-	var isGroup bool
-	var group *directory.Group
-	var err error
-	err = retry(func() error {
-		group, err = config.directory.Groups.Get(email).Do()
-		return err
-	})
-	isGroup = true
-	if err != nil {
-		isGroup = false
-	}
+	isGroup = isMemberGroup(email, config)
 
 	if isGroup == true {
 		if role != "MEMBER" {
@@ -297,7 +301,7 @@ func upsertMember(email, groupEmail, role string, config *Config) error {
 	if isGroup == false {
 		// Basically the same check as group, but using a more apt method "HasMember"
 		// specifically meant for users
-		var hasMemberResponse *directory.MembersHasMember
+		/*var hasMemberResponse *directory.MembersHasMember
 		var err error
 		err = retry(func() error {
 			hasMemberResponse, err = config.directory.Members.HasMember(groupEmail, email).Do()
@@ -315,18 +319,18 @@ func upsertMember(email, groupEmail, role string, config *Config) error {
 		if err != nil {
 			return fmt.Errorf("Error checking hasmember: %s, %s", err, email)
 		}
-
-		if hasMemberResponse.IsMember == true {
-			var updatedGroupMember *directory.Member
-			err = retry(func() error {
-				updatedGroupMember, err = config.directory.Members.Update(groupEmail, email, groupMember).Do()
-				return err
-			})
-			if err != nil {
-				return fmt.Errorf("Error updating groupMember: %s, %s", err, email)
-			}
-			log.Printf("[INFO] Updated groupMember: %s", updatedGroupMember.Email)
-		} else {
+        */
+		var createdGroupMember *directory.Member
+		err = retry(func() error {
+			createdGroupMember, err = config.directory.Members.Insert(groupEmail, groupMember).Do()
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("Error creating groupMember: %s, %s", err, email)
+		}
+		log.Printf("[INFO] Created groupMember: %s", createdGroupMember.Email)
+		/*
+        } else {
 			var createdGroupMember *directory.Member
 			err = retry(func() error {
 				createdGroupMember, err = config.directory.Members.Insert(groupEmail, groupMember).Do()
@@ -336,7 +340,7 @@ func upsertMember(email, groupEmail, role string, config *Config) error {
 				return fmt.Errorf("Error creating groupMember: %s, %s", err, email)
 			}
 			log.Printf("[INFO] Created groupMember: %s", createdGroupMember.Email)
-		}
+		}*/
 	}
 
 	return nil
